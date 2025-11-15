@@ -6738,6 +6738,62 @@ function findLuckyKing(packet) {
 
 // ▲▲▲ 新代码粘贴结束 ▲▲▲
 let state = { chats: {}, activeChatId: null, globalSettings: {}, apiConfig: {}, userStickers: [], worldBooks: [], personaPresets: [], qzoneSettings: {}, activeAlbumId: null };
+function saveChatsSnapshot() {
+    try {
+        const minimal = Object.values(state.chats).map(chat => ({
+            id: chat.id,
+            name: chat.name,
+            isGroup: !!chat.isGroup,
+            groupId: chat.groupId || null,
+            settings: {
+                aiAvatar: chat.settings?.aiAvatar || '',
+                groupAvatar: chat.settings?.groupAvatar || '',
+                myNickname: chat.settings?.myNickname || '',
+                aiAvatarFrame: chat.settings?.aiAvatarFrame || '',
+                theme: chat.settings?.theme || ''
+            },
+            members: chat.members ? chat.members.map(m => ({
+                originalName: m.originalName,
+                groupNickname: m.groupNickname,
+                isMuted: !!m.isMuted,
+                isAdmin: !!m.isAdmin,
+                groupTitle: m.groupTitle || ''
+            })) : []
+        }));
+        localStorage.setItem('ephone-chats-snapshot', JSON.stringify(minimal));
+    } catch (e) {}
+}
+async function restoreChatsFromSnapshot() {
+    try {
+        const saved = localStorage.getItem('ephone-chats-snapshot');
+        if (!saved) return [];
+        const arr = JSON.parse(saved);
+        const now = Date.now();
+        const stubs = arr.map(c => ({
+            id: c.id,
+            name: c.name,
+            isGroup: !!c.isGroup,
+            groupId: c.groupId || null,
+            settings: { ...c.settings },
+            members: c.members || [],
+            history: [],
+            unreadCount: 0,
+            status: c.isGroup ? undefined : { text: '在线', lastUpdate: now, isBusy: false }
+        }));
+        try { await db.chats.bulkPut(stubs); } catch (e) {}
+        return stubs;
+    } catch (e) {
+        return [];
+    }
+}
+async function ensurePersistentStorage() {
+    try {
+        if (navigator.storage && navigator.storage.persist) {
+            const persisted = await navigator.storage.persisted();
+            if (!persisted) { await navigator.storage.persist(); }
+        }
+    } catch (e) {}
+}
 let datingGameState = {
     isActive: false,
     scene: null,
@@ -9367,6 +9423,7 @@ const newChat = {
 
     await db.chats.put(newChat);
     state.chats[newChatId] = newChat;
+    saveChatsSnapshot();
     
     // =================================================================
     // ▼▼▼ 核心修改：重构世界书查找逻辑 ▼▼▼
@@ -10804,6 +10861,12 @@ if (chat.settings.innerVoiceStyles && typeof chat.settings.innerVoiceStyles.icon
         acc[chat.id] = chat;
         return acc;
     }, {});
+    if (Object.keys(state.chats).length === 0) {
+        const restored = await restoreChatsFromSnapshot();
+        if (restored.length > 0) {
+            state.chats = restored.reduce((acc, c) => { acc[c.id] = c; return acc; }, {});
+        }
+    }
 // ▼▼▼ 请用这段新代码替换旧的 state.apiConfig 初始化代码 ▼▼▼
     state.apiConfig = apiConfig || { 
         id: 'main', 
@@ -37825,7 +37888,17 @@ document.getElementById('phone-screen').addEventListener('touchstart', unlockAud
             window.renderWallpaperScreenProxy = renderWallpaperScreen;
             window.renderWorldBookScreenProxy = renderWorldBookScreen;
 
-            await loadAllDataFromDB();
+            await ensurePersistentStorage();
+            try {
+                await loadAllDataFromDB();
+            } catch (e) {
+                const restored = await restoreChatsFromSnapshot();
+                if (restored.length > 0) {
+                    state.chats = restored.reduce((acc, c) => { acc[c.id] = c; return acc; }, {});
+                }
+            }
+            saveChatsSnapshot();
+            setInterval(saveChatsSnapshot, 15000);
                 // ★★★ 核心修复2：在这里添加启动时加载CSS的逻辑 ★★★
     // 优先应用保存在 activeCustomCss 里的代码
     if (state.globalSettings.activeCustomCss) {
