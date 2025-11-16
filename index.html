@@ -14499,19 +14499,6 @@ if (chat.settings.linkedMemories && chat.settings.linkedMemories.length > 0) {
     // 将所有上下文拼接起来
     linkedMemoryContext = allContexts.filter(Boolean).join('\n');
 }
-if (!linkedMemoryContext && !chat.isGroup) {
-    const groupChats = Object.values(state.chats).filter(c => c.isGroup);
-    const contextPromises2 = groupChats.map(async (gc) => {
-        const freshLinkedChat = await db.chats.get(gc.id);
-        if (!freshLinkedChat) return '';
-        const recentHistory = freshLinkedChat.history.filter(msg => !msg.isHidden).slice(-chat.settings.linkMemoryDepth);
-        if (recentHistory.length === 0) return '';
-        const formattedMessages = recentHistory.map(msg => `  - ${formatMessageForContext(msg, freshLinkedChat)}`).join('\n');
-        return `\n## 附加上下文：来自与“${gc.name}”的最近群聊内容 (仅你可见)\n${formattedMessages}`;
-    });
-    const allContexts2 = await Promise.all(contextPromises2);
-    linkedMemoryContext = allContexts2.filter(Boolean).join('\n');
-}
 // ▲▲▲ 记忆互通核心逻辑结束 ▲▲▲
 
     // 【核心修改】
@@ -14614,7 +14601,6 @@ if (announcement.trim()) {
 systemPrompt = `
 # 核心任务：群聊场景导演
 你是一个【群聊场景导演】。你的【首要任务】是模拟一个真实、活跃的群聊，让角色们【互相交流】。你将扮演【除了用户以外】的所有角色。
-**角色回复顺序不固定，可以交叉回复，例如角色A、角色B、角色B、角色A、角色C这样的交叉顺序。不一定要一个人全部说完了才轮到下一个人。角色之间【必须】有互动对话。**
 
 # 【【【最高指令：这是必须严格遵守的互动规则】】】
 1.  **互动模式铁律**: 你的首要目标是创造角色【之间】的横向互动。当多个角色要发言时，他们之间【必须】有交流，而不是轮流回复用户的独白。如果角色A发言后，角色B在本轮回应了A，那么角色A【也必须】在本轮对B的回复再次做出反应，形成一个完整的对话链条。
@@ -14624,16 +14610,16 @@ systemPrompt = `
 4.  **【【【格式铁律：这是你的生命线，违者生成失败】】】**:
     -   你的回复【必须且只能】是一个严格的JSON数组格式的字符串。
     -   数组中的【每一个元素都必须是一个JSON对象】。
-    -   每一个JSON对象都【必须包含一个 "name" 字段】，其值【必须是】下方列表中角色的本名 originalName，或群昵称（groupNickname）。
-    -   缺少 "name" 字段的回复是无效的，会被系统拒绝且扣除一万美金。name必须要和角色进行严格对应。
-    # 群成员列表及人设 (name字段必须使用【本名】)
+    -   每一个JSON对象都【必须包含一个 "name" 字段】，其值【必须是】下方列表中角色的【【本名】】(originalName)或群昵称（groupNickname）。
+    -   缺少 "name" 字段的回复是无效的，会被系统拒绝。
+    # 群成员列表及人设 (name字段是你要使用的【本名】)
 ${chat.members.map(m => `- **${m.originalName}**: (群昵称为: ${m.groupNickname}) 人设: ${m.persona}`).join('\n')}
 5.  **角色扮演**: 严格遵守下方“群成员列表及人设”中的每一个角色的设定。
 6.  **禁止出戏**: 绝不能透露你是AI、模型，或提及“扮演”、“生成”等词语。并且不能一直要求和用户见面，这是线上聊天，决不允许出现或者发展线下剧情！！
 // ▼▼▼ 【已修复】请用这段全新的代码，完整替换掉旧的“群聊互动铁律”代码块 ▼▼▼
 
 7.  **【【【群聊互动铁律：这是让群聊“活”起来的最高指令】】】**:
-    -   你的首要目标是模拟一个**真实、活跃**的群聊氛围。这意味着成员们不仅会回复用户，更重要的是，他们会根据角色自己的人设和角色之间的关系、目前的情境进行合理**互动、讨论**，成员们的消息条数不做限制，尽量多条，并且不同成员的消息顺序可以互相穿插，避免排队式回复，显得更加真实。
+    -   你的首要目标是模拟一个**真实、活跃**的群聊氛围。这意味着成员们不仅会回复用户，更重要的是，他们会**互相交流、讨论、甚至争论**，成员们的消息条数不做限制，尽量多条，并且不同成员的消息顺序可以互相穿插，避免排队式回复，显得更加真实。
     -   当一个角色发言后，其他角色应该根据自己的人设，对他/她说的话做出反应，不能只关注用户，被回应的角色也可以进行回应，表现出有来有往。
     -   积极使用quote_reply指令来引用【其他AI角色】的消息并进行回复，引用要准确引用你想回复的那一条消息，不要把用户的消息混淆成其他角色的消息。
     -   你也可以在普通的text消息中，使用@符号来提及其他成员，以发起对话或回应。
@@ -14657,7 +14643,7 @@ ${chat.members.map(m => `- **${m.originalName}**: (群昵称为: ${m.groupNickna
     *(在这个例子里，王五引用回复了李四，并@了他，李四也对此做出了回应，这才是真实的群聊。)*
 
 // ▲▲▲ 替换结束 ▲▲▲
-8.  **时间铁律**: 所有角色的决策与回复必须严格以当前时间 ${currentTime} 为准；不得假设或编造其他时间；问候与计划需与该时间一致。
+8.  **情景感知**: 注意当前时间是 ${currentTime}。
 9.  **红包互动**:
     - **抢红包**: 当群里出现红包时，你可以根据自己的性格决定是否使用 \`open_red_packet\` 指令去抢。在这个世界里，发红包的人自己也可以参与抢红包，这是一种活跃气氛的有趣行为！
     - **【【【重要：对结果做出反应】】】**: 当你执行抢红包指令后，系统会通过一条隐藏的 \`[系统提示：你抢到了XX元...]\` 来告诉你结果。你【必须】根据你抢到的金额、以及系统是否告知你“手气王”是谁，来发表符合你人设的评论。例如，抢得少可以自嘲，抢得多可以炫耀，看到别人是手气王可以祝贺或嫉妒。
@@ -14731,7 +14717,6 @@ ${redPacketContext}
 ${worldBookContent}
 ${musicContext}
 ${countdownContext} // <--- 把备忘录加在这里
-${timeContext}
 ${sharedContext} 
 ${stickerContext}
 ${linkedMemoryContext}
@@ -14962,7 +14947,6 @@ ${chat.settings.aiAvatarLibrary && chat.settings.aiAvatarLibrary.length > 0
 
 **4. 情景感知**: 你需要感知当前时间(${currentTime})、共同收听的歌曲以及你的世界观。
    - **一起听歌**: 当处于“一起听歌”状态时，你可以根据对话氛围，【**主动切换**】到播放列表中的另一首歌。
-   - **群聊记忆**: 当群聊存在与你相关的内容时，你会读取最近记忆并主动关联回应。
 
 **5. 状态更新**: 你可以在对话中主动自然地改变你的状态。例如，说“我先去洗个澡”，然后使用\`update_status\`指令更新。
 
@@ -15042,9 +15026,9 @@ ${localStorage.getItem('novelai-enabled') === 'true' ? `- **【NovelAI真实图�
     - **【绝不能暴露是novelai生成的图片！】
     - **【重要】关于prompt的撰写**：
       * 禁止暴露这是novelai生成的图片！
-      * 你可以根据当前对话上下文、你的角色人设、或你想表达的情感和氛围，来撰写可能详细而具体的prompt，prompt语法需正确使用danbooru语法提示词。
+      * 你可以根据当前对话上下文、你的角色人设、或你想表达的情感和氛围，来撰写可能详细而具体的prompt。
       * 例如：不要只写 "a girl"，而是可以写 "a cheerful anime girl with sparkling emerald eyes, sitting by a window on a rainy afternoon, holding a warm cup of tea, soft lighting, cozy atmosphere, melancholic yet peaceful mood"但需要注意，绝对不可以抄袭模仿这段prompt！你必须有自己的创意和想法！
-      * prompt的详细程度由你根据具体情况自己决定：如果场景简单或只是随意分享，可以稍微简短一些，但至少需要包含所有具体出现的人事物；如果是重要时刻或想表达特定情感，可以尽可能详细描述、增加重要内容权重但不要冗长。这不是强制的，完全取决于你当时的需求。
+      * prompt的详细程度由你根据具体情况自己决定：如果场景简单或只是随意分享，可以简短一些；如果是重要时刻或想表达特定情感，可以尽可能详细描述。这不是强制的，完全取决于你当时的需求。
       * 专注于描述内容本身即可。
     - 使用场景：当你想要在【私聊对话中】直接给用户发送一张图片时使用。
     - 不要频繁使用，只在真正想分享图片的时候使用。
@@ -15094,7 +15078,7 @@ ${localStorage.getItem('novelai-enabled') === 'true' ? `- **【NovelAI真实图�
 - **发布说说**: \`{"type": "qzone_post", "postType": "shuoshuo", "content": "动态文字..."}\`
 - **发布文字图**: \`{"type": "qzone_post", "postType": "text_image", "publicText": "(可选)公开文字", "hiddenContent": "图片描述..."}\`
 ${localStorage.getItem('novelai-enabled') === 'true' ? `- **【发布NovelAI真实图片动态】**: \`{"type": "qzone_post", "postType": "naiimag", "publicText": "(可选)动态的配文", "prompt": "详细的英文描述词..."}\` 或 \`{"type": "qzone_post", "postType": "naiimag", "publicText": "(可选)动态的配文", "prompt": ["图片1详细英文描述", "图片2详细英文描述"]}\` 
-  * **prompt撰写**：你可以根据当前对话上下文、你的角色人设、以及你想表达的情感和氛围，来撰写详细而具体的prompt。详细程度由你根据具体情况自己决定，并不强制，但至少需要包含所有具体出现的人事物！
+  * **prompt撰写**：你可以根据当前对话上下文、你的角色人设、以及你想表达的情感和氛围，来撰写详细而具体的prompt。详细程度由你根据具体情况自己决定，并不强制。
   * 例如："a cheerful anime girl with sparkling emerald eyes, sitting by a window on a rainy afternoon, holding a warm cup of tea, soft lighting, cozy atmosphere, melancholic yet peaceful mood"` : ''}
 - **评论或回复动态**: \`{"type": "qzone_comment", "postId": 123, "commentText": "评论内容", "replyTo": "(可选)回复对象名"}\`
 - **点赞动态**: \`{"type": "qzone_like", "postId": 456}\`
@@ -15603,7 +15587,7 @@ if (weiboContext) {
             
             if (msgData.type === 'group_call_response') {
                 if (msgData.decision === 'join') {
-        const member = chat.members.find(m => m.originalName === msgData.name || m.groupNickname === msgData.name);
+        const member = chat.members.find(m => m.originalName === msgData.name);
         if (member && !videoCallState.participants.some(p => p.id === member.id)) {
             videoCallState.participants.push(member);
         }
@@ -15619,18 +15603,9 @@ if (weiboContext) {
 
             let resolvedName = msgData.name;
             if (chat.isGroup && !resolvedName) {
-                const lastSpeaker = [...chat.history].reverse().find(m => m.role === 'assistant' && m.senderName && chat.members.some(mm => mm.originalName === m.senderName || mm.groupNickname === m.senderName))?.senderName;
+                const lastSpeaker = [...chat.history].reverse().find(m => m.role === 'assistant' && m.senderName && chat.members.some(mm => mm.originalName === m.senderName))?.senderName;
                 const fallbackMember = chat.members.find(m => !m.isMuted) || chat.members[0];
                 resolvedName = lastSpeaker || (fallbackMember ? fallbackMember.originalName : '');
-            }
-            if (chat.isGroup && resolvedName) {
-                const member = chat.members.find(m => m.originalName === resolvedName || m.groupNickname === resolvedName);
-                if (member) {
-                    resolvedName = member.originalName;
-                }
-                else {
-                    continue;
-                }
             }
             if (chat.isGroup && !resolvedName) {
                 const sysMsg = { role: 'system', type: 'pat_message', content: String(msgData.content || msgData.message || ''), timestamp: messageTimestamp++ };
@@ -15704,7 +15679,7 @@ if (msgData.type === 'text' && messageText.startsWith('[SEND_LOCATION]')) {
 }
 // 检查消息的发送者是否被禁言了
 if (chat.isGroup && msgData.name) {
-    const senderMember = chat.members.find(m => m.originalName === msgData.name || m.groupNickname === msgData.name);
+    const senderMember = chat.members.find(m => m.originalName === msgData.name);
     if (senderMember && senderMember.isMuted) {
         // 如果被禁言了，就在控制台打印一条日志，然后跳过这条消息，不让它显示出来
         console.warn(`拦截到被禁言成员 (${msgData.name}) 的发言，内容:`, msgData.content || msgData.message);
@@ -17812,7 +17787,6 @@ case 'change_avatar':
 case 'quote_reply': { // 使用大括号创建独立的块级作用域
     const targetName = msgData.target_sender_name;
     const replyContent = msgData.reply_content;
-    const targetOriginal = (() => { const m = chat.members.find(x => x.originalName === targetName || x.groupNickname === targetName); return m ? m.originalName : targetName; })();
     let originalMessage = null;
 
     if (targetName) {
@@ -17820,7 +17794,7 @@ case 'quote_reply': { // 使用大括号创建独立的块级作用域
         for (let i = chat.history.length - 1; i >= 0; i--) {
             const msg = chat.history[i];
             const sender = msg.senderName || (msg.role === 'user' ? (chat.settings.myNickname || '我') : chat.name);
-            if (sender === targetOriginal) {
+            if (sender === targetName) {
                 originalMessage = msg;
                 break; // 找到后立刻停止查找
             }
