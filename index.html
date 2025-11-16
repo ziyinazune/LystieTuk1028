@@ -14499,6 +14499,19 @@ if (chat.settings.linkedMemories && chat.settings.linkedMemories.length > 0) {
     // 将所有上下文拼接起来
     linkedMemoryContext = allContexts.filter(Boolean).join('\n');
 }
+if (!linkedMemoryContext && !chat.isGroup) {
+    const groupChats = Object.values(state.chats).filter(c => c.isGroup);
+    const contextPromises2 = groupChats.map(async (gc) => {
+        const freshLinkedChat = await db.chats.get(gc.id);
+        if (!freshLinkedChat) return '';
+        const recentHistory = freshLinkedChat.history.filter(msg => !msg.isHidden).slice(-chat.settings.linkMemoryDepth);
+        if (recentHistory.length === 0) return '';
+        const formattedMessages = recentHistory.map(msg => `  - ${formatMessageForContext(msg, freshLinkedChat)}`).join('\n');
+        return `\n## 附加上下文：来自与“${gc.name}”的最近群聊内容 (仅你可见)\n${formattedMessages}`;
+    });
+    const allContexts2 = await Promise.all(contextPromises2);
+    linkedMemoryContext = allContexts2.filter(Boolean).join('\n');
+}
 // ▲▲▲ 记忆互通核心逻辑结束 ▲▲▲
 
     // 【核心修改】
@@ -14611,9 +14624,9 @@ systemPrompt = `
 4.  **【【【格式铁律：这是你的生命线，违者生成失败】】】**:
     -   你的回复【必须且只能】是一个严格的JSON数组格式的字符串。
     -   数组中的【每一个元素都必须是一个JSON对象】。
-    -   每一个JSON对象都【必须包含一个 "name" 字段】，其值【必须是】下方列表中角色的【【本名】】(originalName)或群昵称（groupNickname）。
+    -   每一个JSON对象都【必须包含一个 "name" 字段】，其值【必须是】下方列表中角色的本名 originalName，或群昵称（groupNickname）。
     -   缺少 "name" 字段的回复是无效的，会被系统拒绝且扣除一万美金。name必须要和角色进行严格对应。
-    # 群成员列表及人设 (name字段是你要使用的【本名】)
+    # 群成员列表及人设 (name字段必须使用【本名】)
 ${chat.members.map(m => `- **${m.originalName}**: (群昵称为: ${m.groupNickname}) 人设: ${m.persona}`).join('\n')}
 5.  **角色扮演**: 严格遵守下方“群成员列表及人设”中的每一个角色的设定。
 6.  **禁止出戏**: 绝不能透露你是AI、模型，或提及“扮演”、“生成”等词语。并且不能一直要求和用户见面，这是线上聊天，决不允许出现或者发展线下剧情！！
@@ -14644,7 +14657,7 @@ ${chat.members.map(m => `- **${m.originalName}**: (群昵称为: ${m.groupNickna
     *(在这个例子里，王五引用回复了李四，并@了他，李四也对此做出了回应，这才是真实的群聊。)*
 
 // ▲▲▲ 替换结束 ▲▲▲
-8.  **情景感知**: 一定注意当前时间是 ${currentTime}。
+8.  **时间铁律**: 所有角色的决策与回复必须严格以当前时间 ${currentTime} 为准；不得假设或编造其他时间；问候与计划需与该时间一致。
 9.  **红包互动**:
     - **抢红包**: 当群里出现红包时，你可以根据自己的性格决定是否使用 \`open_red_packet\` 指令去抢。在这个世界里，发红包的人自己也可以参与抢红包，这是一种活跃气氛的有趣行为！
     - **【【【重要：对结果做出反应】】】**: 当你执行抢红包指令后，系统会通过一条隐藏的 \`[系统提示：你抢到了XX元...]\` 来告诉你结果。你【必须】根据你抢到的金额、以及系统是否告知你“手气王”是谁，来发表符合你人设的评论。例如，抢得少可以自嘲，抢得多可以炫耀，看到别人是手气王可以祝贺或嫉妒。
@@ -14718,6 +14731,7 @@ ${redPacketContext}
 ${worldBookContent}
 ${musicContext}
 ${countdownContext} // <--- 把备忘录加在这里
+${timeContext}
 ${sharedContext} 
 ${stickerContext}
 ${linkedMemoryContext}
@@ -14948,6 +14962,7 @@ ${chat.settings.aiAvatarLibrary && chat.settings.aiAvatarLibrary.length > 0
 
 **4. 情景感知**: 你需要感知当前时间(${currentTime})、共同收听的歌曲以及你的世界观。
    - **一起听歌**: 当处于“一起听歌”状态时，你可以根据对话氛围，【**主动切换**】到播放列表中的另一首歌。
+   - **群聊记忆**: 当群聊存在与你相关的内容时，你会读取最近记忆并主动关联回应。
 
 **5. 状态更新**: 你可以在对话中主动自然地改变你的状态。例如，说“我先去洗个澡”，然后使用\`update_status\`指令更新。
 
@@ -15588,7 +15603,7 @@ if (weiboContext) {
             
             if (msgData.type === 'group_call_response') {
                 if (msgData.decision === 'join') {
-        const member = chat.members.find(m => m.originalName === msgData.name);
+        const member = chat.members.find(m => m.originalName === msgData.name || m.groupNickname === msgData.name);
         if (member && !videoCallState.participants.some(p => p.id === member.id)) {
             videoCallState.participants.push(member);
         }
@@ -15604,9 +15619,18 @@ if (weiboContext) {
 
             let resolvedName = msgData.name;
             if (chat.isGroup && !resolvedName) {
-                const lastSpeaker = [...chat.history].reverse().find(m => m.role === 'assistant' && m.senderName && chat.members.some(mm => mm.originalName === m.senderName))?.senderName;
+                const lastSpeaker = [...chat.history].reverse().find(m => m.role === 'assistant' && m.senderName && chat.members.some(mm => mm.originalName === m.senderName || mm.groupNickname === m.senderName))?.senderName;
                 const fallbackMember = chat.members.find(m => !m.isMuted) || chat.members[0];
                 resolvedName = lastSpeaker || (fallbackMember ? fallbackMember.originalName : '');
+            }
+            if (chat.isGroup && resolvedName) {
+                const member = chat.members.find(m => m.originalName === resolvedName || m.groupNickname === resolvedName);
+                if (member) {
+                    resolvedName = member.originalName;
+                }
+                else {
+                    continue;
+                }
             }
             if (chat.isGroup && !resolvedName) {
                 const sysMsg = { role: 'system', type: 'pat_message', content: String(msgData.content || msgData.message || ''), timestamp: messageTimestamp++ };
@@ -15680,7 +15704,7 @@ if (msgData.type === 'text' && messageText.startsWith('[SEND_LOCATION]')) {
 }
 // 检查消息的发送者是否被禁言了
 if (chat.isGroup && msgData.name) {
-    const senderMember = chat.members.find(m => m.originalName === msgData.name);
+    const senderMember = chat.members.find(m => m.originalName === msgData.name || m.groupNickname === msgData.name);
     if (senderMember && senderMember.isMuted) {
         // 如果被禁言了，就在控制台打印一条日志，然后跳过这条消息，不让它显示出来
         console.warn(`拦截到被禁言成员 (${msgData.name}) 的发言，内容:`, msgData.content || msgData.message);
@@ -17788,6 +17812,7 @@ case 'change_avatar':
 case 'quote_reply': { // 使用大括号创建独立的块级作用域
     const targetName = msgData.target_sender_name;
     const replyContent = msgData.reply_content;
+    const targetOriginal = (() => { const m = chat.members.find(x => x.originalName === targetName || x.groupNickname === targetName); return m ? m.originalName : targetName; })();
     let originalMessage = null;
 
     if (targetName) {
@@ -17795,7 +17820,7 @@ case 'quote_reply': { // 使用大括号创建独立的块级作用域
         for (let i = chat.history.length - 1; i >= 0; i--) {
             const msg = chat.history[i];
             const sender = msg.senderName || (msg.role === 'user' ? (chat.settings.myNickname || '我') : chat.name);
-            if (sender === targetName) {
+            if (sender === targetOriginal) {
                 originalMessage = msg;
                 break; // 找到后立刻停止查找
             }
