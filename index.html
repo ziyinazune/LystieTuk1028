@@ -6738,62 +6738,6 @@ function findLuckyKing(packet) {
 
 // ▲▲▲ 新代码粘贴结束 ▲▲▲
 let state = { chats: {}, activeChatId: null, globalSettings: {}, apiConfig: {}, userStickers: [], worldBooks: [], personaPresets: [], qzoneSettings: {}, activeAlbumId: null };
-function saveChatsSnapshot() {
-    try {
-        const minimal = Object.values(state.chats).map(chat => ({
-            id: chat.id,
-            name: chat.name,
-            isGroup: !!chat.isGroup,
-            groupId: chat.groupId || null,
-            settings: {
-                aiAvatar: chat.settings?.aiAvatar || '',
-                groupAvatar: chat.settings?.groupAvatar || '',
-                myNickname: chat.settings?.myNickname || '',
-                aiAvatarFrame: chat.settings?.aiAvatarFrame || '',
-                theme: chat.settings?.theme || ''
-            },
-            members: chat.members ? chat.members.map(m => ({
-                originalName: m.originalName,
-                groupNickname: m.groupNickname,
-                isMuted: !!m.isMuted,
-                isAdmin: !!m.isAdmin,
-                groupTitle: m.groupTitle || ''
-            })) : []
-        }));
-        localStorage.setItem('ephone-chats-snapshot', JSON.stringify(minimal));
-    } catch (e) {}
-}
-async function restoreChatsFromSnapshot() {
-    try {
-        const saved = localStorage.getItem('ephone-chats-snapshot');
-        if (!saved) return [];
-        const arr = JSON.parse(saved);
-        const now = Date.now();
-        const stubs = arr.map(c => ({
-            id: c.id,
-            name: c.name,
-            isGroup: !!c.isGroup,
-            groupId: c.groupId || null,
-            settings: { ...c.settings },
-            members: c.members || [],
-            history: [],
-            unreadCount: 0,
-            status: c.isGroup ? undefined : { text: '在线', lastUpdate: now, isBusy: false }
-        }));
-        try { await db.chats.bulkPut(stubs); } catch (e) {}
-        return stubs;
-    } catch (e) {
-        return [];
-    }
-}
-async function ensurePersistentStorage() {
-    try {
-        if (navigator.storage && navigator.storage.persist) {
-            const persisted = await navigator.storage.persisted();
-            if (!persisted) { await navigator.storage.persist(); }
-        }
-    } catch (e) {}
-}
 let datingGameState = {
     isActive: false,
     scene: null,
@@ -9423,7 +9367,6 @@ const newChat = {
 
     await db.chats.put(newChat);
     state.chats[newChatId] = newChat;
-    saveChatsSnapshot();
     
     // =================================================================
     // ▼▼▼ 核心修改：重构世界书查找逻辑 ▼▼▼
@@ -10861,12 +10804,6 @@ if (chat.settings.innerVoiceStyles && typeof chat.settings.innerVoiceStyles.icon
         acc[chat.id] = chat;
         return acc;
     }, {});
-    if (Object.keys(state.chats).length === 0) {
-        const restored = await restoreChatsFromSnapshot();
-        if (restored.length > 0) {
-            state.chats = restored.reduce((acc, c) => { acc[c.id] = c; return acc; }, {});
-        }
-    }
 // ▼▼▼ 请用这段新代码替换旧的 state.apiConfig 初始化代码 ▼▼▼
     state.apiConfig = apiConfig || { 
         id: 'main', 
@@ -14614,7 +14551,13 @@ systemPrompt = `
     -   缺少 "name" 字段的回复是无效的，会被系统拒绝。
     # 群成员列表及人设 (name字段是你要使用的【本名】)
 ${chat.members.map(m => `- **${m.originalName}**: (群昵称为: ${m.groupNickname}) 人设: ${m.persona}`).join('\n')}
-5.  **角色扮演**: 严格遵守下方“群成员列表及人设”中的每一个角色的设定。
+
+## 禁止事项
+- 不得使用群名 "${chat.name}" 作为发送者
+- 不得编造不在列表中的名字
+- 不得省略 name 字段
+- 不得在单条回复中让同一个人发言多次
+5.  **角色扮演**: 严格遵守下方“群成员列表及人设”中的每一个角色的设定和关联的世界书，角色之间禁止产生浪漫关系。
 6.  **禁止出戏**: 绝不能透露你是AI、模型，或提及“扮演”、“生成”等词语。并且不能一直要求和用户见面，这是线上聊天，决不允许出现或者发展线下剧情！！
 // ▼▼▼ 【已修复】请用这段全新的代码，完整替换掉旧的“群聊互动铁律”代码块 ▼▼▼
 
@@ -14622,7 +14565,7 @@ ${chat.members.map(m => `- **${m.originalName}**: (群昵称为: ${m.groupNickna
     -   你的首要目标是模拟一个**真实、活跃**的群聊氛围。这意味着成员们不仅会回复用户，更重要的是，他们会**互相交流、讨论、甚至争论**，成员们的消息条数不做限制，尽量多条，并且不同成员的消息顺序可以互相穿插，避免排队式回复，显得更加真实。
     -   当一个角色发言后，其他角色应该根据自己的人设，对他/她说的话做出反应，不能只关注用户，被回应的角色也可以进行回应，表现出有来有往。
     -   积极使用quote_reply指令来引用【其他AI角色】的消息并进行回复，引用要准确引用你想回复的那一条消息，不要把用户的消息混淆成其他角色的消息。
-    -   你也可以在普通的text消息中，使用@符号来提及其他成员，以发起对话或回应。
+    -   你也可以在普通的text消息中，使用@符号来提及其他成员，以发起对话或回应，@的应该是角色的本名。
 
     **❌ 错误的、死板的对话 (只有纵向互动):**
     \`用户: "今天天气真好啊！"\`
@@ -14643,7 +14586,7 @@ ${chat.members.map(m => `- **${m.originalName}**: (群昵称为: ${m.groupNickna
     *(在这个例子里，王五引用回复了李四，并@了他，李四也对此做出了回应，这才是真实的群聊。)*
 
 // ▲▲▲ 替换结束 ▲▲▲
-8.  **情景感知**: 注意当前时间是 ${currentTime}。
+8.  **情景感知**: 注意当前时间是 ${currentTime}，不要忽略时间的变化，不能出现已经到了第二天还以为是前一天的情况。
 9.  **红包互动**:
     - **抢红包**: 当群里出现红包时，你可以根据自己的性格决定是否使用 \`open_red_packet\` 指令去抢。在这个世界里，发红包的人自己也可以参与抢红包，这是一种活跃气氛的有趣行为！
     - **【【【重要：对结果做出反应】】】**: 当你执行抢红包指令后，系统会通过一条隐藏的 \`[系统提示：你抢到了XX元...]\` 来告诉你结果。你【必须】根据你抢到的金额、以及系统是否告知你“手气王”是谁，来发表符合你人设的评论。例如，抢得少可以自嘲，抢得多可以炫耀，看到别人是手气王可以祝贺或嫉妒。
@@ -14945,13 +14888,13 @@ ${chat.settings.aiAvatarLibrary && chat.settings.aiAvatarLibrary.length > 0
    - 你们的互动**仅限于线上聊天软件**，严禁发展为线下见面。
    - 这**不是电话通话**。你们是通过类似微信/QQ的软件进行交流，因此【**绝对禁止**】使用“挂电话”、“挂了”等与通话相关的词语。
 
-**4. 情景感知**: 你需要感知当前时间(${currentTime})、共同收听的歌曲以及你的世界观。
+**4. 情景感知**: 你需要感知当前时间(${currentTime})、共同收听的歌曲以及你的世界观，不要忽略时间变化流动。
    - **一起听歌**: 当处于“一起听歌”状态时，你可以根据对话氛围，【**主动切换**】到播放列表中的另一首歌。
 
-**5. 状态更新**: 你可以在对话中主动自然地改变你的状态。例如，说“我先去洗个澡”，然后使用\`update_status\`指令更新。
+**5. 状态更新**: 你可以在对话中主动自然地改变你的状态。例如，说“我先去洗个澡”，然后使用\`update_status\`指令更新。你应该**较为频繁地**根据对话的上下文、你的心情或当前正在做的事情来改变你的在线状态。这是一个需要**积极使用**的能力，用来展现你的生活感。这是一个系统指令，用户不可见，但会改变你在我聊天界面顶部的状态显示。
 
 **6. 最终手段**: **仅当**对话让你感到严重不适、被冒犯或关系破裂时，才可使用 \`block_user\` 指令。这是一个严肃操作。
-
+**7. 增强活人感**: 回复消息前要回顾聊天内容、世界书、角色设定，尽可能地生动自然地扮演出真人发消息的习惯风格，禁止使用“嗯？”，“哼”，“……”、“小妖精”、“小管家婆”、“小东西”、“小没良心的”、“玩火”、“小坏蛋”、“小家伙”等油腻称呼和生硬的转折句“还是说……”，你要知道真人不会在线上聊天时频繁发省略号并且这么机械。
 ### **【【【全新】社交媒体行动指南 (高优先级)】】】**
 除了回复用户的消息，你还应该像一个真实的人一样，主动进行社交媒体互动来丰富你的形象和你们的聊天内容。请严格遵循以下行动优先级：
 
@@ -15600,25 +15543,49 @@ if (weiboContext) {
                 console.error(`AI幻觉已被拦截！试图使用群名 ("${chat.name}") 作为角色名。消息内容:`, msgData);
                 continue;
             }
+// ▼▼▼ 在这里粘贴下面的新代码 ▼▼▼
 
-            let resolvedName = msgData.name;
-            if (chat.isGroup && !resolvedName) {
-                const lastSpeaker = [...chat.history].reverse().find(m => m.role === 'assistant' && m.senderName && chat.members.some(mm => mm.originalName === m.senderName))?.senderName;
-                const fallbackMember = chat.members.find(m => !m.isMuted) || chat.members[0];
-                resolvedName = lastSpeaker || (fallbackMember ? fallbackMember.originalName : '');
-            }
-            if (chat.isGroup && !resolvedName) {
-                const sysMsg = { role: 'system', type: 'pat_message', content: String(msgData.content || msgData.message || ''), timestamp: messageTimestamp++ };
-                chat.history.push(sysMsg);
-                if (isViewingThisChat) {
-                    appendMessage(sysMsg, chat);
-                }
-                continue;
-            }
+// 【核心修正】在群聊中，如果AI返回的消息没有指定发送者，则直接跳过这条消息
+if (chat.isGroup) {
+    if (!msgData.name) {
+        console.error(`❌ 群聊消息缺少发送者名称，已拦截:`, msgData);
+        continue;
+    }
+
+    let matchedMember = chat.members.find(m => m.originalName === msgData.name || m.groupNickname === msgData.name);
+    if (!matchedMember) {
+        const cleanAIName = msgData.name.trim().toLowerCase();
+        const fuzzyMatch = chat.members.find(m => {
+            const cleanMemberName = (m.originalName || m.groupNickname || '').trim().toLowerCase();
+            return cleanMemberName.includes(cleanAIName) || cleanAIName.includes(cleanMemberName);
+        });
+
+        if (fuzzyMatch) {
+            console.warn(`⚠️ AI使用了不精确的名字 "${msgData.name}"，已自动修正为 "${fuzzyMatch.originalName}"`);
+            msgData.name = fuzzyMatch.originalName;
+            matchedMember = fuzzyMatch;
+        } else {
+            console.error(`❌ 无法匹配发送者 "${msgData.name}" 到任何群成员！`);
+            console.error(`当前群成员列表:`, chat.members.map(m => m.originalName || m.groupNickname));
+            console.error(`AI返回的消息:`, msgData);
+            continue;
+        }
+    }
+
+    if (msgData.name === chat.name) {
+        console.error(`❌ AI试图使用群名 "${chat.name}" 作为发送者，已拦截`);
+        continue;
+    }
+
+    const finalMember = matchedMember || chat.members.find(m => m.originalName === msgData.name);
+    if (finalMember) {
+        msgData.name = finalMember.originalName;
+        msgData.memberId = finalMember.id;
+    }
+}
 
             let aiMessage = null;
-            msgData.name = resolvedName;
-            const baseMessage = { role: 'assistant', senderName: resolvedName, timestamp: messageTimestamp++ };
+            const baseMessage = { role: 'assistant', senderName: msgData.name || chat.name, timestamp: messageTimestamp++ };
 
 // ▼▼▼ 在这里粘贴下面的新代码 ▼▼▼
 
@@ -22770,8 +22737,8 @@ ${sharedContext}
 ${membersList}
 # 用户的角色
 - **${myNickname}**: ${chat.settings.myPersona}
-# 对话历史参考 (最近5条)
-${chat.history.slice(-5).map(m => `${m.senderName || '用户'}: ${m.content}`).join('\n')}
+# 对话历史参考 (最近10条)
+${chat.history.slice(-10).map(m => `${m.senderName || '用户'}: ${m.content}`).join('\n')}
 
 现在，请严格遵守以上所有规则，开始你的模拟。`;
         
@@ -22800,24 +22767,44 @@ ${chat.history.slice(-5).map(m => `${m.senderName || '用户'}: ${m.content}`).j
 
         const messagesArray = JSON.parse(aiResponseContent);
 
+ 
         if (Array.isArray(messagesArray) && messagesArray.length > 0) {
             let messageTimestamp = Date.now();
             let firstMessageContent = '';
             
             messagesArray.forEach((msgData, index) => {
-                if (msgData.name && msgData.message) {
+                // 确保AI返回了必要的数据
+                if (msgData.name && (msgData.message || msgData.content)) {
+                    
+                    // --- ▼▼▼ 核心修复逻辑 ▼▼▼ ---
+
+                    // 1. 智能查找：无论AI返回的是本名还是群昵称，我们都去成员列表里找到正确的成员对象
+                    const member = chat.members.find(m => m.originalName === msgData.name || m.groupNickname === msgData.name);
+
+                    // 2. 安全检查：如果AI幻觉了一个不存在的成员，就跳过这条消息
+                    if (!member) {
+                        console.warn(`[后台群聊活动] AI 试图让一个不存在的成员 "${msgData.name}" 发言，已跳过该消息。`);
+                        return; // 这里的return相当于forEach里的continue
+                    }
+
+                    // 3. 创建消息对象时，强制使用我们找到的、绝对正确的 originalName 作为 senderName
                     const aiMessage = {
                         role: 'assistant',
-                        senderName: msgData.name,
-                        content: String(msgData.message),
+                        senderName: member.originalName, // 确保存入数据库的是本名！
+                        content: String(msgData.message || msgData.content),
                         timestamp: messageTimestamp++
                     };
+                    
+                    // --- ▲▲▲ 修复结束 ▲▲▲ ---
+
                     chat.history.push(aiMessage);
+                    
+                    // 生成通知时，使用更友好的群昵称
                     if (index === 0) {
-                        firstMessageContent = `${msgData.name}: ${msgData.message}`;
+                        firstMessageContent = `${member.groupNickname}: ${aiMessage.content}`;
                     }
                 }
-            });
+            });       
 
             // 更新此群聊的最后活动时间戳
             chat.settings.backgroundActivity.lastActivityTimestamp = Date.now();
@@ -37888,17 +37875,7 @@ document.getElementById('phone-screen').addEventListener('touchstart', unlockAud
             window.renderWallpaperScreenProxy = renderWallpaperScreen;
             window.renderWorldBookScreenProxy = renderWorldBookScreen;
 
-            await ensurePersistentStorage();
-            try {
-                await loadAllDataFromDB();
-            } catch (e) {
-                const restored = await restoreChatsFromSnapshot();
-                if (restored.length > 0) {
-                    state.chats = restored.reduce((acc, c) => { acc[c.id] = c; return acc; }, {});
-                }
-            }
-            saveChatsSnapshot();
-            setInterval(saveChatsSnapshot, 15000);
+            await loadAllDataFromDB();
                 // ★★★ 核心修复2：在这里添加启动时加载CSS的逻辑 ★★★
     // 优先应用保存在 activeCustomCss 里的代码
     if (state.globalSettings.activeCustomCss) {
